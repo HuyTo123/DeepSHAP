@@ -68,6 +68,8 @@ class DeepExplainer(Explainer):
             have a value of False during predictions (and hence explanations).
 
         """
+        print('oke to here')
+
         # first, we need to find the framework
         if type(model) is tuple:
             a, b = model
@@ -84,14 +86,8 @@ class DeepExplainer(Explainer):
                 framework = "tensorflow"
 
         masker = data
-        super().__init__(model, masker)
-
-        self.explainer: TFDeep | PyTorchDeep
-        if framework == "tensorflow":
-            from .deep_tf import TFDeep
-
-            self.explainer = TFDeep(model, data, session, learning_phase_flags)
-        elif framework == "pytorch":
+        super().__init__(model, masker)        
+        if framework == "pytorch":
             from .deep_pytorch import PyTorchDeep
 
             self.explainer = PyTorchDeep(model, data)

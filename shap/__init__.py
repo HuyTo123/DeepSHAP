@@ -1,19 +1,9 @@
 from ._explanation import Cohorts, Explanation
 
 # explainers
-from .explainers import other
-from .explainers._additive import AdditiveExplainer
 from .explainers._deep import DeepExplainer
-from .explainers._exact import ExactExplainer
-from .explainers._explainer import Explainer
-from .explainers._gpu_tree import GPUTreeExplainer
 from .explainers._gradient import GradientExplainer
-from .explainers._kernel import KernelExplainer
-from .explainers._linear import LinearExplainer
-from .explainers._partition import PartitionExplainer
-from .explainers._permutation import PermutationExplainer
-from .explainers._sampling import SamplingExplainer
-from .explainers._tree import TreeExplainer
+
 
 try:
     # Version from setuptools-scm
@@ -87,7 +77,7 @@ else:
 
 
 # other stuff :)
-from . import datasets, links, utils  # noqa: E402
+from . import  links, utils  # noqa: E402
 from .actions._optimizer import ActionOptimizer  # noqa: E402
 from .utils import approximate_interactions, sample  # noqa: E402
 
@@ -99,7 +89,6 @@ __all__ = [
     "Cohorts",
     "Explanation",
     # Explainers
-    "other",
     "AdditiveExplainer",
     "DeepExplainer",
     "ExactExplainer",

@@ -186,7 +186,11 @@ class PyTorchDeep(Explainer):
                 joint_x = [torch.cat((tiled_X[t], self.data[t]), dim=0) for t in range(len(X))]
                 # run attribution computation graph
                 feature_ind = model_output_ranks[j, i]
+
+                # Error in here 
                 sample_phis = self.gradient(feature_ind, joint_x)
+
+                
                 # assign the attributions to the right part of the output arrays
                 if self.interim:
                     sample_phis, output = sample_phis
@@ -356,18 +360,33 @@ def linear_1d(module, grad_input, grad_output):
     return None
 
 
+
+
 def nonlinear_1d(module, grad_input, grad_output):
     import torch
 
+    # Tính delta_out: Khác biệt output giữa input thực tế và input nền (reference)
     delta_out = module.y[: int(module.y.shape[0] / 2)] - module.y[int(module.y.shape[0] / 2) :]
 
+    # Tính delta_in: Khác biệt input giữa input thực tế và input nền (reference)
     delta_in = module.x[: int(module.x.shape[0] / 2)] - module.x[int(module.x.shape[0] / 2) :]
+
+    # dup0 dùng để điều chỉnh shape cho phép toán .repeat() sau đó
     dup0 = [2] + [1 for i in delta_in.shape[1:]]
-    # handles numerical instabilities where delta_in is very small by
-    # just taking the gradient in those cases
+
     grads = [None for _ in grad_input]
+
+    # Tính gradient theo quy tắc DeepLIFT Rescale cho lớp phi tuyến
+    # grads[0] = torch.where( condition, value_if_true, value_if_false )
+
     grads[0] = torch.where(
-        torch.abs(delta_in.repeat(dup0)) < 1e-6, grad_input[0], grad_output[0] * (delta_out / delta_in).repeat(dup0)
+        # Điều kiện: Nếu delta_in quá nhỏ (tránh chia cho 0)
+        torch.abs(delta_in.repeat(dup0)) < 1e-6,
+        # Nếu True: Dùng thẳng grad_input (gradient thông thường)
+        grad_input[0],
+        # Nếu False: Áp dụng quy tắc Rescale của DeepLIFT
+        # ===>>> LỖI XẢY RA Ở PHÉP NHÂN TRONG PHẦN NÀY <<<===
+        grad_output[0] * (delta_out / delta_in).repeat(dup0)
     )
     return tuple(grads)
 
