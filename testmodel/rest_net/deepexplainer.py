@@ -11,9 +11,9 @@ import shap
 import matplotlib.pyplot as plt
 
 # --- Cấu hình ---
-model_path = 'resnet50_catdog_finetuned.pth'
+model_path = 'testmodel/rest_net/resnet50_catdog_finetuned.pth'
 # image_path_to_explain = 'test_set/cats/cat.4001.jpg' # Không cần nữa nếu dùng dataset
-train_dir = 'training_set' # Vẫn cần nếu dùng cho background, nhưng code hiện tại không dùng
+train_dir = 'testmodel/training_set' # Vẫn cần nếu dùng cho background, nhưng code hiện tại không dùng
 num_classes = 2
 class_names = ['cats', 'dogs']
 # num_background_samples = 50 # Không dùng trong code mới

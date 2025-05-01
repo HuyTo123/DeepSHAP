@@ -7,9 +7,7 @@ from typing import Any, Callable, cast
 
 import numpy as np
 import pandas as pd
-import scipy.cluster
 import scipy.sparse
-import scipy.spatial
 import sklearn
 from slicer import Alias, Obj, Slicer
 

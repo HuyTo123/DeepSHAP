@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from ..._explanation import Explanation
-from .._explainer import Explainer
 
 
-class DeepExplainer(Explainer):
+class DeepExplainer():
     """Meant to approximate SHAP values for deep learning models.
 
     This is an enhanced version of the DeepLIFT algorithm (Deep SHAP) where, similar to Kernel SHAP, we
@@ -68,7 +67,6 @@ class DeepExplainer(Explainer):
             have a value of False during predictions (and hence explanations).
 
         """
-        print('oke to here')
 
         # first, we need to find the framework
         if type(model) is tuple:
@@ -85,8 +83,6 @@ class DeepExplainer(Explainer):
             except Exception:
                 framework = "tensorflow"
 
-        masker = data
-        super().__init__(model, masker)        
         if framework == "pytorch":
             from .deep_pytorch import PyTorchDeep
 

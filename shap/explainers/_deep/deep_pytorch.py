@@ -3,14 +3,13 @@ import warnings
 import numpy as np
 from packaging import version
 
-from .._explainer import Explainer
 from .deep_utils import _check_additivity
 
 
-class PyTorchDeep(Explainer):
+class PyTorchDeep():
     def __init__(self, model, data):
         import torch
-
+        print("PyTorchDeep.__init__")
         if version.parse(torch.__version__) < version.parse("0.4"):
             warnings.warn("Your PyTorch version is older than 0.4 and not supported.")
 
@@ -20,12 +19,14 @@ class PyTorchDeep(Explainer):
             self.multi_input = True
         if not isinstance(data, list):
             data = [data]
-        self.data = data
+        self.data = data # data is a list of tensors
         self.layer = None
         self.input_handle = None
         self.interim = False
         self.interim_inputs_shape = None
         self.expected_value = None  # to keep the DeepExplainer base happy
+
+        # Tuple as known as "layer" is a tuple of (model, layer) where model is the model and layer is the layer to be explained
         if isinstance(model, tuple):
             self.interim = True
             model, layer = model
@@ -45,12 +46,15 @@ class PyTorchDeep(Explainer):
                     self.interim_inputs_shape = [interim_inputs.shape]
             self.target_handle.remove()
             del self.layer.target_input
-        self.model = model.eval()
+    
 
+        self.model = model.eval()
+        # Assume that the model is only one output
         self.multi_output = False
         self.num_outputs = 1
         with torch.no_grad():
-            outputs = model(*data)
+            #  * = unpacking argument 
+            outputs = model(*data) # Models forward pass, shape of output is (batch_size, num_outputs)
 
             # also get the device everything is running on
             self.device = outputs.device
@@ -67,8 +71,11 @@ class PyTorchDeep(Explainer):
         """Add handles to all non-container layers in the model.
         Recursively for non-container layers
         """
+        print("add_handles")
         handles_list = []
+        #  Take all layer of the model
         model_children = list(model.children())
+        print("model_children", model_children)
         if model_children:
             for child in model_children:
                 handles_list.extend(self.add_handles(child, forward_handle, backward_handle))
@@ -96,7 +103,6 @@ class PyTorchDeep(Explainer):
 
     def gradient(self, idx, inputs):
         import torch
-
         self.model.zero_grad()
         X = [x.requires_grad_() for x in inputs]
         outputs = self.model(*X)
@@ -129,35 +135,41 @@ class PyTorchDeep(Explainer):
 
     def shap_values(self, X, ranked_outputs=None, output_rank_order="max", check_additivity=True):
         import torch
-        # X ~ self.model_input
-        # X_data ~ self.data
-
-        # check if we have multiple inputs
+      
+        # check if we have multiple inputs, if not, we need to convert the input to a list
         if not self.multi_input:
+            # We recheck the type of X, because it may be a single tensor or a list of tensors
             assert not isinstance(X, list), "Expected a single tensor model input!"
             X = [X]
         else:
+            # if multi_input, we need to check that is list of tensors
             assert isinstance(X, list), "Expected a list of model inputs!"
 
+        # X is model inputs, so we need to detach them from the computing graph, to avoid any gradient computation
+        # and move them to the same device as the model
         X = [x.detach().to(self.device) for x in X]
 
         model_output_values = None
-
+       
         if ranked_outputs is not None and self.multi_output:
             with torch.no_grad():
                 model_output_values = self.model(*X)
-            # rank and determine the model outputs that we will explain
+            # rank and determine the model outputs that we will explain, _ is the values, model_output_ranks are the ranks indexes
             if output_rank_order == "max":
                 _, model_output_ranks = torch.sort(model_output_values, descending=True)
             elif output_rank_order == "min":
                 _, model_output_ranks = torch.sort(model_output_values, descending=False)
-            elif output_rank_order == "max_abs":
+            # max_abs is the absolute value of the model output, so we sort by the absolute value of the model output
+            elif output_rank_order == "max_abs":  
                 _, model_output_ranks = torch.sort(torch.abs(model_output_values), descending=True)
             else:
                 emsg = "output_rank_order must be max, min, or max_abs!"
                 raise ValueError(emsg)
             model_output_ranks = model_output_ranks[:, :ranked_outputs]
         else:
+            #  User did not specify ranked_outputs, so we will use all outputs without ranking
+            # tensor(batch_size, num_outputs) = torch.ones((X[0].shape[0], self.num_outputs)).int() * torch.arange(0, self.num_outputs).int()
+            # element wise
             model_output_ranks = (
                 torch.ones((X[0].shape[0], self.num_outputs)).int() * torch.arange(0, self.num_outputs).int()
             )
@@ -265,7 +277,6 @@ def add_interim_values(module, input, output):
     from the graph. Used to calculate the multipliers
     """
     import torch
-
     try:
         del module.x
     except AttributeError:
@@ -317,7 +328,6 @@ def passthrough(module, grad_input, grad_output):
 
 def maxpool(module, grad_input, grad_output):
     import torch
-
     pool_to_unpool = {
         "MaxPool1d": torch.nn.functional.max_unpool1d,
         "MaxPool2d": torch.nn.functional.max_unpool2d,
@@ -357,6 +367,7 @@ def maxpool(module, grad_input, grad_output):
 
 def linear_1d(module, grad_input, grad_output):
     """No change made to gradients."""
+
     return None
 
 

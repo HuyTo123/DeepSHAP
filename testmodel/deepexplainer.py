@@ -64,7 +64,7 @@ batch = next(iter(test_loader))
 images, _ = batch
 
 background = images[:5]
-test_images = images[6:7]
+test_images = images[6:8]
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -73,7 +73,7 @@ print('Đã khởi tạo xong DeepExplainer')
 shap_values = explainer.shap_values(test_images.to(device)) # Chuyển đổi kích thước tensor về (1,3,128,128) để phù hợp với đầu vào của model
 shap_values = np.sum(shap_values[0], axis = 0)
 img_data = detatch(test_images[0])
-plot_image = shap.image_plot(shap_values,img_data, show=False ) # Chuyển đổi về numpy array để vẽ hình ảnh
+# plot_image = shap.image_plot(shap_values,img_data, show=False ) # Chuyển đổi về numpy array để vẽ hình ảnh
 print('Đã tính toán xong SHAP values')
 plt.show()
 
