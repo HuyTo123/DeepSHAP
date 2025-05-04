@@ -19,14 +19,15 @@ class PyTorchDeep():
             self.multi_input = True
         if not isinstance(data, list):
             data = [data]
-        self.data = data # data is a list of tensors
+        self.data = data # data is a list of tensors - baseline data
         self.layer = None
         self.input_handle = None
         self.interim = False
         self.interim_inputs_shape = None
         self.expected_value = None  # to keep the DeepExplainer base happy
-
-        # Tuple as known as "layer" is a tuple of (model, layer) where model is the model and layer is the layer to be explained
+        self.count  = 0
+        # interim use for you want to get the output of a specific layer in the model
+        # Tuple at this point is (model, layer) where model is the model and layer is the layer you want to get the output of
         if isinstance(model, tuple):
             self.interim = True
             model, layer = model
@@ -62,7 +63,7 @@ class PyTorchDeep():
                 self.multi_output = True
                 self.num_outputs = outputs.shape[1]
             self.expected_value = outputs.mean(0).cpu().numpy()
-
+    # for interim layer
     def add_target_handle(self, layer):
         input_handle = layer.register_forward_hook(get_target_input)
         self.target_handle = input_handle
@@ -71,15 +72,19 @@ class PyTorchDeep():
         """Add handles to all non-container layers in the model.
         Recursively for non-container layers
         """
-        print("add_handles")
+        # forward_handle = add_interim_values
+        # backward_handle = deeplift_grad
         handles_list = []
         #  Take all layer of the model
         model_children = list(model.children())
-        print("model_children", model_children)
         if model_children:
             for child in model_children:
                 handles_list.extend(self.add_handles(child, forward_handle, backward_handle))
+              
         else:  # leaves
+            #  In pytorch, the leaves are the layers that are not containers, and we only need to supply the hooks which is action we onlyneed
+            #  x and y and all values related will automatic calculate by pytorch when forward and backward pass
+            # actually it just registers the event handlers at layer which fitted the rules
             handles_list.append(model.register_forward_hook(forward_handle))
             handles_list.append(model.register_full_backward_hook(backward_handle))
         return handles_list
@@ -103,10 +108,16 @@ class PyTorchDeep():
 
     def gradient(self, idx, inputs):
         import torch
+        #  remove all gradient parameters to make sure 
+        #  we don't use the old ones
         self.model.zero_grad()
+        # inputs is joint_x (type array), idx is class of sample J 
         X = [x.requires_grad_() for x in inputs]
+        # forward pass
         outputs = self.model(*X)
+        # outputs is tensor [batch_size, num_outputs] 
         selected = [val for val in outputs[:, idx]]
+        print(selected[0])
         grads = []
         if self.interim:
             interim_inputs = self.layer.target_input
@@ -147,6 +158,7 @@ class PyTorchDeep():
 
         # X is model inputs, so we need to detach them from the computing graph, to avoid any gradient computation
         # and move them to the same device as the model
+        # If we use detach(), 2 tensor will not independent, if one change the other will change too
         X = [x.detach().to(self.device) for x in X]
 
         model_output_values = None
@@ -173,9 +185,9 @@ class PyTorchDeep():
             model_output_ranks = (
                 torch.ones((X[0].shape[0], self.num_outputs)).int() * torch.arange(0, self.num_outputs).int()
             )
-
-        # add the gradient handles
+        # Register the hook for forward and backward pass
         handles = self.add_handles(self.model, add_interim_values, deeplift_grad)
+        # add the specialized gradient handles for the interim layer
         if self.interim:
             self.add_target_handle(self.layer)
 
@@ -187,19 +199,27 @@ class PyTorchDeep():
                 for k in range(len(self.interim_inputs_shape)):
                     phis.append(np.zeros((X[0].shape[0],) + self.interim_inputs_shape[k][1:]))
             else:
+                # assign the input tensor of a picture 
                 for k in range(len(X)):
                     phis.append(np.zeros(X[k].shape))
             for j in range(X[0].shape[0]):
-                # tile the inputs to line up with the background data samples
+                # tile (Nhân bản) the inputs to line up with (Thẳng hàng, tương ứng) the background data samples
+                # data is baseline
+                # we use j : j +1 to keep the dimension 1, [1, 3, 32, 32] instead of [3, 32, 32]
+                # t always is 0 if we don't have multi_input
                 tiled_X = [
+                    # X[t][j : j + 1].repeat((self.data[t].shape[0],)  = take input of tensor batch_size 1 and repeat
+                    # we make tuple (batch_size baseline, 1,1,1,1) to make it same shape with baseline data
                     X[t][j : j + 1].repeat((self.data[t].shape[0],) + tuple([1 for k in range(len(X[t].shape) - 1)]))
                     for t in range(len(X))
                 ]
+                # concat the input and background data [batch_size X + batch_size baseline, 3, 32, 32]
                 joint_x = [torch.cat((tiled_X[t], self.data[t]), dim=0) for t in range(len(X))]
                 # run attribution computation graph
+                # take the class i of j batch_size , tensor rank 0 scalar
                 feature_ind = model_output_ranks[j, i]
 
-                # Error in here 
+                # Error in here !! call only one
                 sample_phis = self.gradient(feature_ind, joint_x)
 
                 
@@ -263,20 +283,28 @@ def deeplift_grad(module, grad_input, grad_output):
     """
     # first, get the module type
     module_type = module.__class__.__name__
+
     # first, check the module is supported
     if module_type in op_handler:
+        # print(module_type,op_handler[module_type], op_handler[module_type].__name__) 
+        # ex: Linear <function linear_1d at 0x000002AC8DE81580> linear_1d
         if op_handler[module_type].__name__ not in ["passthrough", "linear_1d"]:
+            # op_handler[module_type] is a function, so we need to register hook to specific layer type
             return op_handler[module_type](module, grad_input, grad_output)
     else:
         warnings.warn(f"unrecognized nn.Module: {module_type}")
         return grad_input
 
 
-def add_interim_values(module, input, output):
+def add_interim_values( module, input, output):
     """The forward hook used to save interim tensors, detached
     from the graph. Used to calculate the multipliers
+    interim_values is temporarily saved in the module, and will be removed.
+    Module.x and module.y will only use in backward pass
     """
     import torch
+    # remove the x and y attributes if they exist, to avoid overwriting
+    #  remove the x and y attributes if they exist, to avoid overwriting
     try:
         del module.x
     except AttributeError:
@@ -285,21 +313,25 @@ def add_interim_values(module, input, output):
         del module.y
     except AttributeError:
         pass
+    #  type module_type is string
     module_type = module.__class__.__name__
+    #  Make sure the module name is defined in op_handler at below the class
     if module_type in op_handler:
         func_name = op_handler[module_type].__name__
         # First, check for cases where we don't need to save the x and y tensors
         if func_name == "passthrough":
             pass
         else:
-            # check only the 0th input varies
+            # check only the 0th input varies 
+            # print(input[0].shape, output.shape, func_name) ~ input is tuple and output is tensor
             for i in range(len(input)):
-                if i != 0 and type(output) is tuple:
+                # output is a tensor so we need a little fix right here (tuple -> tensor)
+                if i != 0 and type(output) is torch.Tensor:
                     assert input[i] == output[i], "Only the 0th input may vary!"
             # if a new method is added, it must be added here too. This ensures tensors
             # are only saved if necessary
             if func_name in ["maxpool", "nonlinear_1d"]:
-                # only save tensors if necessary
+                # only save tensors if necessary and will use at the backward pass
                 if type(input) is tuple:
                     module.x = torch.nn.Parameter(input[0].detach())
                 else:
@@ -308,6 +340,7 @@ def add_interim_values(module, input, output):
                     module.y = torch.nn.Parameter(output[0].detach())
                 else:
                     module.y = torch.nn.Parameter(output.detach())
+
 
 
 def get_target_input(module, input, output):
@@ -367,7 +400,6 @@ def maxpool(module, grad_input, grad_output):
 
 def linear_1d(module, grad_input, grad_output):
     """No change made to gradients."""
-
     return None
 
 
