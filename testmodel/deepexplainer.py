@@ -64,7 +64,7 @@ batch = next(iter(test_loader))
 images, _ = batch
 
 background = images[:5]
-test_images = images[6:7]
+test_images = images[6:8]
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 

@@ -106,6 +106,7 @@ class DeepExplainer():
         -------
         shap.Explanation:
         """
+        # Rarely call this method directly, but it is useful for debugging and testing.
         shap_values = self.shap_values(X)
         return Explanation(values=shap_values, data=X)
 

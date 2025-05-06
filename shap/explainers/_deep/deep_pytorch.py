@@ -81,7 +81,7 @@ class PyTorchDeep():
             for child in model_children:
                 handles_list.extend(self.add_handles(child, forward_handle, backward_handle))
               
-        else:  # leaves
+        else:  # leaves module is a layer not have child module
             #  In pytorch, the leaves are the layers that are not containers, and we only need to supply the hooks which is action we onlyneed
             #  x and y and all values related will automatic calculate by pytorch when forward and backward pass
             # actually it just registers the event handlers at layer which fitted the rules
@@ -111,19 +111,26 @@ class PyTorchDeep():
         #  remove all gradient parameters to make sure 
         #  we don't use the old ones
         self.model.zero_grad()
-        # inputs is joint_x (type array), idx is class of sample J 
+        # inputs is joint_x (type array), idx is class of sample J idx is int
+        # if there not multimodel, inputs is array len 1
         X = [x.requires_grad_() for x in inputs]
         # forward pass
-        outputs = self.model(*X)
         # outputs is tensor [batch_size, num_outputs] 
+        # outputs give us logits before last activation function
+        outputs = self.model(*X)
+        #  take the logits score for each sample of class idx
+        # selected is a list  of tensor[logits of class idx] and len(X) = numper of batch_size inputs
         selected = [val for val in outputs[:, idx]]
-        print(selected[0])
         grads = []
+    
         if self.interim:
             interim_inputs = self.layer.target_input
             for idx, input in enumerate(interim_inputs):
                 grad = torch.autograd.grad(
-                    selected, input, retain_graph=True if idx + 1 < len(interim_inputs) else None, allow_unused=True
+                    selected, 
+                    input, 
+                    retain_graph=True if idx + 1 < len(interim_inputs) else None, 
+                    allow_unused=True # Allows inputs x to be 0
                 )[0]
                 if grad is not None:
                     grad = grad.cpu().numpy()
@@ -134,10 +141,18 @@ class PyTorchDeep():
             return grads, [i.detach().cpu().numpy() for i in interim_inputs]
         else:
             for idx, x in enumerate(X):
+                #  Calcute gradient of Selected with respec t to the input x
+                # selected is a list of neruel idx of batch_size
+                # x is a tensor of input (join_x which is use to repeat the amouunt x into N_baseline )
                 grad = torch.autograd.grad(
-                    selected, x, retain_graph=True if idx + 1 < len(X) else None, allow_unused=True
-                )[0]
+                    selected, 
+                    x, 
+                    # if the last input or model have only one input, the graph be not retained
+                    retain_graph=True if idx + 1 < len(X) else None, 
+                    allow_unused=True  # Allows gradient to be 0
+                )[0] # auto grad always return a tuple, in this case there only one index, so we will take [0]
                 if grad is not None:
+                    # grad is a tensor, so we need to convert it to numpy array
                     grad = grad.cpu().numpy()
                 else:
                     grad = torch.zeros_like(x).cpu().numpy()
@@ -186,30 +201,34 @@ class PyTorchDeep():
                 torch.ones((X[0].shape[0], self.num_outputs)).int() * torch.arange(0, self.num_outputs).int()
             )
         # Register the hook for forward and backward pass
+        # hadles is used to manage the hooks, so we can remove
         handles = self.add_handles(self.model, add_interim_values, deeplift_grad)
         # add the specialized gradient handles for the interim layer
         if self.interim:
             self.add_target_handle(self.layer)
-
         # compute the attributions
         output_phis = []
         for i in range(model_output_ranks.shape[1]):
+            # phis will storage shape values of eact class and each input and each sample
             phis = []
             if self.interim:
                 for k in range(len(self.interim_inputs_shape)):
                     phis.append(np.zeros((X[0].shape[0],) + self.interim_inputs_shape[k][1:]))
             else:
-                # assign the input tensor of a picture 
+                # assign the input tensor of multi_input to phis but in this case only one
                 for k in range(len(X)):
                     phis.append(np.zeros(X[k].shape))
+            # X[0].shape[0] is the number of samples in the batch_size depend on how many 
+            # pictures we want to explaine
             for j in range(X[0].shape[0]):
                 # tile (Nhân bản) the inputs to line up with (Thẳng hàng, tương ứng) the background data samples
                 # data is baseline
                 # we use j : j +1 to keep the dimension 1, [1, 3, 32, 32] instead of [3, 32, 32]
                 # t always is 0 if we don't have multi_input
+
                 tiled_X = [
                     # X[t][j : j + 1].repeat((self.data[t].shape[0],)  = take input of tensor batch_size 1 and repeat
-                    # we make tuple (batch_size baseline, 1,1,1,1) to make it same shape with baseline data
+                    # we make tuple (batch_size baseline, 1,1,1) to make it same shape with baseline data
                     X[t][j : j + 1].repeat((self.data[t].shape[0],) + tuple([1 for k in range(len(X[t].shape) - 1)]))
                     for t in range(len(X))
                 ]
@@ -218,10 +237,10 @@ class PyTorchDeep():
                 # run attribution computation graph
                 # take the class i of j batch_size , tensor rank 0 scalar
                 feature_ind = model_output_ranks[j, i]
-
-                # Error in here !! call only one
+                # Error in here !! 
+                # sample_phis[0] is as shape as joint_x but contain but type is numpy.ndarray
+                # the gradient follow the DeepLIFT rule
                 sample_phis = self.gradient(feature_ind, joint_x)
-
                 
                 # assign the attributions to the right part of the output arrays
                 if self.interim:
@@ -234,16 +253,30 @@ class PyTorchDeep():
                     for t in range(len(self.interim_inputs_shape)):
                         phis[t][j] = (sample_phis[t][self.data[t].shape[0] :] * (x[t] - data[t])).mean(0)
                 else:
+                    # not interim so len(X) = 1
+                    # t is number of inputs, j is number of sample in batch_size we want to explain
                     for t in range(len(X)):
-                        phis[t][j] = (
-                            (
+                        # DeepSHAP calculation
+                        phis[t][j] = ( 
+                            (   
+                                #  0 to self.data[t].shape[0] is the sample with is already repeated 
+                                #  self.data[t].shape[0] : is the number of background data
+                                # torch.from_numpy convert numpy.ndarray to tensor
+                                # .to(self.device) move the tensor to the same device as the model
+                                # shape of (torch.from_numpy(sample_phis[t][self.data[t].shape[0] :]).to(self.device)) 
+                                # is (batch_size, rgb, width, height) and it is multiplier of DeepSHAPE rule
+
                                 torch.from_numpy(sample_phis[t][self.data[t].shape[0] :]).to(self.device)
                                 * (X[t][j : j + 1] - self.data[t])
+                                # X[t][j : j + 1 ] - self.data[t] is the difference between the sample the background data
+                                # Pytorch will use broadcasting to make the shape same in order do minus
+                                # * is elent wise multiplication
                             )
-                            .cpu()
-                            .detach()
-                            .numpy()
-                            .mean(0)
+                            .cpu() # return to cpu
+                            .detach() # just for sure 
+                            .numpy() # convert to numpy array
+                            .mean(0) # divide by the number of background data E(f'(x))
+                            # mean 0 is the mean of first axis(dimiension 0)
                         )
             output_phis.append(phis[0] if not self.multi_input else phis)
         # cleanup; remove all gradient handles
@@ -254,6 +287,7 @@ class PyTorchDeep():
             self.target_handle.remove()
 
         # check that the SHAP values sum up to the model output
+        # Make sure that it have additivity property
         if check_additivity:
             if model_output_values is None:
                 with torch.no_grad():
@@ -283,11 +317,10 @@ def deeplift_grad(module, grad_input, grad_output):
     """
     # first, get the module type
     module_type = module.__class__.__name__
-
     # first, check the module is supported
     if module_type in op_handler:
         # print(module_type,op_handler[module_type], op_handler[module_type].__name__) 
-        # ex: Linear <function linear_1d at 0x000002AC8DE81580> linear_1d
+        # ex: Linear <function linear_1d at 0x000002AC8DE81580-memory adrress of functon> linear_1d
         if op_handler[module_type].__name__ not in ["passthrough", "linear_1d"]:
             # op_handler[module_type] is a function, so we need to register hook to specific layer type
             return op_handler[module_type](module, grad_input, grad_output)
@@ -407,14 +440,14 @@ def linear_1d(module, grad_input, grad_output):
 
 def nonlinear_1d(module, grad_input, grad_output):
     import torch
-
+    print(module.y.shape)
     # Tính delta_out: Khác biệt output giữa input thực tế và input nền (reference)
     delta_out = module.y[: int(module.y.shape[0] / 2)] - module.y[int(module.y.shape[0] / 2) :]
 
     # Tính delta_in: Khác biệt input giữa input thực tế và input nền (reference)
     delta_in = module.x[: int(module.x.shape[0] / 2)] - module.x[int(module.x.shape[0] / 2) :]
 
-    # dup0 dùng để điều chỉnh shape cho phép toán .repeat() sau đó
+    # Lỗi dimension ở đây
     dup0 = [2] + [1 for i in delta_in.shape[1:]]
 
     grads = [None for _ in grad_input]
