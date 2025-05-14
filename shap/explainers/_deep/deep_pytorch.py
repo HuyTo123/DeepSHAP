@@ -1,5 +1,5 @@
 import warnings
-
+import sys
 import numpy as np
 from packaging import version
 
@@ -47,7 +47,7 @@ class PyTorchDeep():
                     self.interim_inputs_shape = [interim_inputs.shape]
             self.target_handle.remove()
             del self.layer.target_input
-    
+   
 
         self.model = model.eval()
         # Assume that the model is only one output
@@ -125,30 +125,30 @@ class PyTorchDeep():
     
         if self.interim:
             interim_inputs = self.layer.target_input
-            for idx, input in enumerate(interim_inputs):
+            for number_input, input in enumerate(interim_inputs):
                 grad = torch.autograd.grad(
                     selected, 
                     input, 
-                    retain_graph=True if idx + 1 < len(interim_inputs) else None, 
+                    retain_graph=True if number_input + 1 < len(interim_inputs) else None, 
                     allow_unused=True # Allows inputs x to be 0
                 )[0]
                 if grad is not None:
                     grad = grad.cpu().numpy()
                 else:
-                    grad = torch.zeros_like(X[idx]).cpu().numpy()
+                    grad = torch.zeros_like(X[number_input]).cpu().numpy()
                 grads.append(grad)
             del self.layer.target_input
             return grads, [i.detach().cpu().numpy() for i in interim_inputs]
         else:
-            for idx, x in enumerate(X):
-                #  Calcute gradient of Selected with respec t to the input x
+            for number_input, x in enumerate(X):
+                #  Calcute gradient of Selected with respect to the input x
                 # selected is a list of neruel idx of batch_size
                 # x is a tensor of input (join_x which is use to repeat the amouunt x into N_baseline )
                 grad = torch.autograd.grad(
                     selected, 
                     x, 
                     # if the last input or model have only one input, the graph be not retained
-                    retain_graph=True if idx + 1 < len(X) else None, 
+                    retain_graph=True if number_input + 1 < len(X) else None, 
                     allow_unused=True  # Allows gradient to be 0
                 )[0] # auto grad always return a tuple, in this case there only one index, so we will take [0]
                 if grad is not None:
@@ -177,7 +177,6 @@ class PyTorchDeep():
         X = [x.detach().to(self.device) for x in X]
 
         model_output_values = None
-       
         if ranked_outputs is not None and self.multi_output:
             with torch.no_grad():
                 model_output_values = self.model(*X)
@@ -197,6 +196,7 @@ class PyTorchDeep():
             #  User did not specify ranked_outputs, so we will use all outputs without ranking
             # tensor(batch_size, num_outputs) = torch.ones((X[0].shape[0], self.num_outputs)).int() * torch.arange(0, self.num_outputs).int()
             # element wise
+            # self.num_outputs is int and value is number of outputs (class)
             model_output_ranks = (
                 torch.ones((X[0].shape[0], self.num_outputs)).int() * torch.arange(0, self.num_outputs).int()
             )
@@ -373,7 +373,7 @@ def add_interim_values( module, input, output):
                     module.y = torch.nn.Parameter(output[0].detach())
                 else:
                     module.y = torch.nn.Parameter(output.detach())
-
+                # print(func_name, module.x.shape, module.y.shape)
 
 
 def get_target_input(module, input, output):
@@ -407,6 +407,7 @@ def maxpool(module, grad_input, grad_output):
     delta_in = module.x[: int(module.x.shape[0] / 2)] - module.x[int(module.x.shape[0] / 2) :]
     dup0 = [2] + [1 for i in delta_in.shape[1:]]
     # we also need to check if the output is a tuple
+    # print('maxpool', 'grad_input', grad_input[0].shape, 'grad_output', grad_output[0].shape, dup0, module.x.shape, module.y.shape)
     y, ref_output = torch.chunk(module.y, 2)
     cross_max = torch.max(y, ref_output)
     diffs = torch.cat([cross_max - ref_output, y - cross_max], 0)
@@ -433,6 +434,7 @@ def maxpool(module, grad_input, grad_output):
 
 def linear_1d(module, grad_input, grad_output):
     """No change made to gradients."""
+
     return None
 
 
@@ -440,30 +442,33 @@ def linear_1d(module, grad_input, grad_output):
 
 def nonlinear_1d(module, grad_input, grad_output):
     import torch
-    print(module.y.shape)
-    # Tính delta_out: Khác biệt output giữa input thực tế và input nền (reference)
+    # print(module.y.shape)
+    # Calculuate the difference between the output of sample and baseline data
     delta_out = module.y[: int(module.y.shape[0] / 2)] - module.y[int(module.y.shape[0] / 2) :]
 
-    # Tính delta_in: Khác biệt input giữa input thực tế và input nền (reference)
+    # Calculuate the difference between the input of sample and baseline data
     delta_in = module.x[: int(module.x.shape[0] / 2)] - module.x[int(module.x.shape[0] / 2) :]
 
-    # Lỗi dimension ở đây
+    # duplicate 
     dup0 = [2] + [1 for i in delta_in.shape[1:]]
 
     grads = [None for _ in grad_input]
-
     # Tính gradient theo quy tắc DeepLIFT Rescale cho lớp phi tuyến
     # grads[0] = torch.where( condition, value_if_true, value_if_false )
-
-    grads[0] = torch.where(
-        # Điều kiện: Nếu delta_in quá nhỏ (tránh chia cho 0)
-        torch.abs(delta_in.repeat(dup0)) < 1e-6,
-        # Nếu True: Dùng thẳng grad_input (gradient thông thường)
-        grad_input[0],
-        # Nếu False: Áp dụng quy tắc Rescale của DeepLIFT
-        # ===>>> LỖI XẢY RA Ở PHÉP NHÂN TRONG PHẦN NÀY <<<===
-        grad_output[0] * (delta_out / delta_in).repeat(dup0)
-    )
+    # print(module.__class__, module.x.shape, module.y.shape, grad_input[0].shape, grad_output[0].shape, dup0)
+    try: 
+        grads[0] = torch.where(
+            # Condition if delta_in < 1e-6 nearly 0, will make the multiplier extremely big
+            torch.abs(delta_in.repeat(dup0)) < 1e-6,
+            # If true use the grad_input[0] follow the auto_grad (grad_fn)
+            grad_input[0],
+            # Rescale rule  and chain-rule, previous multiplier(grad_output[0]) * current_multiplier (delta_y/delta_x) 
+            # Make sure the element-wise multiplication is correct and broadcastable too
+            grad_output[0] * (delta_out / delta_in).repeat(dup0)
+        )
+    except Exception as e:
+        print("Don't use the same neruel network object, module.x and module.y will be overwrite and we can't not use the multiplier with (delta_in/delta_out)broadcast") 
+        sys.exit(f'broadcast or elenment-wise error: {e}')
     return tuple(grads)
 
 

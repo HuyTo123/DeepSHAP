@@ -53,7 +53,7 @@ explain_transform = transforms.Compose([
 ])
 # Tải dataset để lấy ảnh và đường dẫn
 try:
-    dataset = torchvision.datasets.ImageFolder(root='test_set', transform=explain_transform)
+    dataset = torchvision.datasets.ImageFolder(root='testmodel/test_set', transform=explain_transform)
     if len(dataset) < 15: # Kiểm tra xem có đủ ảnh không
          print(f"Lỗi: Thư mục 'test_set' cần ít nhất 15 ảnh.")
          exit()
